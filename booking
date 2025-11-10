@@ -1,0 +1,292 @@
+#include <stdio.h>
+#include <stdlib.h>
+#include <string.h>
+
+#define NAME_LEN 50
+#define LOC_LEN 30
+#define DATE_LEN 15
+#define TIME_LEN 10
+
+struct Route {
+    int id;
+    char from[LOC_LEN];
+    char to[LOC_LEN];
+    char date[DATE_LEN];
+    char time[TIME_LEN];
+    int totalSeats;
+    int bookedSeats;
+    struct Route* next;
+};
+
+struct Booking {
+    int bookingID;
+    char passengerName[NAME_LEN];
+    char mode[8];
+    int routeID;
+    struct Booking* next;
+};
+
+struct Passenger {
+    char name[NAME_LEN];
+    int routeID;
+    struct Passenger* next;
+};
+
+struct WaitingListNode {
+    int routeID;
+    struct Passenger* front;
+    struct Passenger* rear;
+    struct WaitingListNode* next;
+};
+
+struct Route* trainList = NULL;
+struct Route* flightList = NULL;
+struct Booking* bookingStackTop = NULL;
+struct Booking* bookingHistoryHead = NULL;
+struct WaitingListNode* waitingHead = NULL;
+
+int nextRouteID = 1;
+int nextBookingID = 1000;
+
+struct Route* createRouteNode(const char* from, const char* to, const char* date, const char* time, int seats) {
+    struct Route* r = (struct Route*)malloc(sizeof(struct Route));
+    r->id = nextRouteID++;
+    strncpy(r->from, from, LOC_LEN-1); r->from[LOC_LEN-1] = '\0';
+    strncpy(r->to, to, LOC_LEN-1); r->to[LOC_LEN-1] = '\0';
+    strncpy(r->date, date, DATE_LEN-1); r->date[DATE_LEN-1] = '\0';
+    strncpy(r->time, time, TIME_LEN-1); r->time[TIME_LEN-1] = '\0';
+    r->totalSeats = seats;
+    r->bookedSeats = 0;
+    r->next = NULL;
+    return r;
+}
+
+void appendRoute(struct Route** head, struct Route* node) {
+    if (*head == NULL) { *head = node; return; }
+    struct Route* cur = *head;
+    while (cur->next) cur = cur->next;
+    cur->next = node;
+}
+
+struct Route* findRouteByID(struct Route* head, int id) {
+    struct Route* cur = head;
+    while (cur) {
+        if (cur->id == id) return cur;
+        cur = cur->next;
+    }
+    return NULL;
+}
+
+void printRoute(struct Route* r) {
+    if (!r) return;
+    printf("ID: %d | %s -> %s | Date: %s | Time: %s | Seats: %d/%d\n",
+           r->id, r->from, r->to, r->date, r->time, r->bookedSeats, r->totalSeats);
+}
+
+void displayAllRoutes(struct Route* head) {
+    struct Route* cur = head;
+    if (!cur) { printf("  (none)\n"); return; }
+    while (cur) { printRoute(cur); cur = cur->next; }
+}
+
+// Waiting list functions
+struct WaitingListNode* findWaitingNode(int routeID) {
+    struct WaitingListNode* cur = waitingHead;
+    while (cur) {
+        if (cur->routeID == routeID) return cur;
+        cur = cur->next;
+    }
+    return NULL;
+}
+
+struct WaitingListNode* createWaitingNode(int routeID) {
+    struct WaitingListNode* node = (struct WaitingListNode*)malloc(sizeof(struct WaitingListNode));
+    node->routeID = routeID;
+    node->front = node->rear = NULL;
+    node->next = waitingHead;
+    waitingHead = node;
+    return node;
+}
+
+void enqueueWaiting(int routeID, const char* pname) {
+    struct WaitingListNode* w = findWaitingNode(routeID);
+    if (!w) w = createWaitingNode(routeID);
+    struct Passenger* p = (struct Passenger*)malloc(sizeof(struct Passenger));
+    strncpy(p->name, pname, NAME_LEN-1); p->name[NAME_LEN-1] = '\0';
+    p->routeID = routeID;
+    p->next = NULL;
+    if (!w->rear) { w->front = w->rear = p; }
+    else { w->rear->next = p; w->rear = p; }
+}
+
+struct Passenger* dequeueWaiting(int routeID) {
+    struct WaitingListNode* w = findWaitingNode(routeID);
+    if (!w || !w->front) return NULL;
+    struct Passenger* p = w->front;
+    w->front = p->next;
+    if (!w->front) w->rear = NULL;
+    p->next = NULL;
+    return p;
+}
+
+// Booking stack functions
+
+void pushBooking(const char* pname, const char* mode, int routeID) {
+    struct Booking* b = (struct Booking*)malloc(sizeof(struct Booking));
+    b->bookingID = nextBookingID++;
+    strncpy(b->passengerName, pname, NAME_LEN-1); b->passengerName[NAME_LEN-1] = '\0';
+    strncpy(b->mode, mode, 7); b->mode[7] = '\0';
+    b->routeID = routeID;
+    b->next = bookingStackTop;
+    bookingStackTop = b;
+
+    // Add to booking history linked list
+    b->next = bookingHistoryHead;
+    bookingHistoryHead = b;
+
+    printf("Booking successful! Booking ID: %d\n", b->bookingID);
+}
+
+struct Booking* popBooking() {
+    if (!bookingStackTop) return NULL;
+    struct Booking* top = bookingStackTop;
+    bookingStackTop = bookingStackTop->next;
+    top->next = NULL;
+    return top;
+}
+
+// Core booking/cancel logic
+void bookTicket(struct Route** routeList, int routeID, const char* pname, const char* mode) {
+    struct Route* r = findRouteByID(*routeList, routeID);
+    if (!r) { printf("Route not found (ID %d).\n", routeID); return; }
+
+    if (r->bookedSeats < r->totalSeats) {
+        r->bookedSeats++;
+        pushBooking(pname, mode, routeID);
+    } else {
+        printf("No seats available on route %d. Adding to waiting list.\n", routeID);
+        enqueueWaiting(routeID, pname);
+    }
+}
+
+void cancelLastBooking() {
+    struct Booking* b = popBooking();
+    if (!b) { printf("No bookings to cancel.\n"); return; }
+    printf("Cancelling Booking ID %d for %s (Mode: %s)\n", b->bookingID, b->passengerName, b->mode);
+
+    struct Route* r = NULL;
+    if (strcmp(b->mode, "Train") == 0) r = findRouteByID(trainList, b->routeID);
+    else r = findRouteByID(flightList, b->routeID);
+
+    if (r) {
+        if (r->bookedSeats > 0) r->bookedSeats--;
+        struct Passenger* p = dequeueWaiting(r->id);
+        if (p) {
+            printf("Assigning freed seat to waiting passenger %s (Route %d)\n", p->name, r->id);
+            r->bookedSeats++;
+            pushBooking(p->name, b->mode, r->id);
+            free(p);
+        }
+    } else {
+        printf("Original route for this booking not found.\n");
+    }
+
+    free(b);
+}
+
+void viewAllBookings() {
+    struct Booking* cur = bookingHistoryHead;
+    if (!cur) {
+        printf("No bookings yet.\n");
+        return;
+    }
+    printf("\nAll Bookings:\n");
+    while (cur) {
+        printf("Booking ID: %d | %s | Passenger: %s | Route ID: %d\n", cur->bookingID, cur->mode, cur->passengerName, cur->routeID);
+        cur = cur->next;
+    }
+}
+
+// Sample Data
+void seedSampleData() {
+    appendRoute(&trainList, createRouteNode("Delhi", "Mumbai", "2025-11-10", "09:30", 2));
+    appendRoute(&trainList, createRouteNode("Delhi", "Kolkata", "2025-11-10", "11:30", 3));
+    appendRoute(&trainList, createRouteNode("Mumbai", "Goa", "2025-11-12", "06:00", 1));
+
+    appendRoute(&flightList, createRouteNode("Delhi", "Bengaluru", "2025-11-10", "07:00", 2));
+    appendRoute(&flightList, createRouteNode("Bengaluru", "Hyderabad", "2025-11-12", "13:15", 2));
+}
+
+// Input Helpers
+
+void readStr(const char* prompt, char* out, int len) {
+    printf("%s", prompt);
+    if (fgets(out, len, stdin)) {
+        size_t l = strlen(out);
+        if (l && out[l-1] == '\n') out[l-1] = '\0';
+    }
+}
+
+int readInt(const char* prompt) {
+    char buf[32];
+    readStr(prompt, buf, sizeof(buf));
+    return atoi(buf);
+}
+// Menu Functions
+void showMainMenu() {
+    printf("\n=== TravelEase Booking System ===\n");
+    printf("1. Book Train Ticket\n");
+    printf("2. Book Flight Ticket\n");
+    printf("3. View All Trains\n");
+    printf("4. View All Flights\n");
+    printf("5. Cancel Last Booking (Undo)\n");
+    printf("6. View Waiting List for a Route\n");
+    printf("7. View All Your Bookings\n");
+    printf("8. Exit\n");
+}
+
+void viewWaitingListForRoute(int routeID) {
+    struct WaitingListNode* w = findWaitingNode(routeID);
+    if (!w || !w->front) { printf("No waiting passengers for route %d.\n", routeID); return; }
+    printf("Waiting list for route %d:\n", routeID);
+    struct Passenger* cur = w->front;
+    int i = 1;
+    while (cur) { printf("  %d. %s\n", i++, cur->name); cur = cur->next; }
+}
+
+int main() {
+    seedSampleData();
+    char pname[NAME_LEN];
+    int choice;
+    while (1) {
+        showMainMenu();
+        choice = readInt("Enter choice: ");
+        switch (choice) {
+            case 1: {
+                printf("Available Trains:\n"); displayAllRoutes(trainList);
+                int id = readInt("Enter Train ID to book: ");
+                readStr("Enter Passenger Name: ", pname, NAME_LEN);
+                bookTicket(&trainList, id, pname, "Train");
+                break;
+            }
+            case 2: {
+                printf("Available Flights:\n"); displayAllRoutes(flightList);
+                int id = readInt("Enter Flight ID to book: ");
+                readStr("Enter Passenger Name: ", pname, NAME_LEN);
+                bookTicket(&flightList, id, pname, "Flight");
+                break;
+            }
+            case 3: printf("Trains:\n"); displayAllRoutes(trainList); break;
+            case 4: printf("Flights:\n"); displayAllRoutes(flightList); break;
+            case 5: cancelLastBooking(); break;
+            case 6: {
+                int id = readInt("Enter Route ID to view waiting list: ");
+                viewWaitingListForRoute(id); break;
+            }
+            case 7: viewAllBookings(); break;
+            case 8: printf("Exiting. Goodbye.\n"); return 0;
+            default: printf("Invalid choice. Try again.\n");
+        }
+    }
+    return 0;
+}
